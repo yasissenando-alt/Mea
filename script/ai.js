@@ -1,25 +1,23 @@
-const axios = require('axios');
+const axios = require("axios");
 
 module.exports.config = {
-  name: 'ai',
-  version: '4.0.0',
-  role: 0,
+  name: "ai",
+  version: "1.0.0",
+  role: 0, // ✅ PUBLIC ACCESS
   hasPrefix: false,
-  aliases: ['gpt', 'study', 'assistant', 'exam'],
-  description: "ChatGPT School Assistant (Exam, MCQ, Essay, Math, Vision)",
-  usage: "ai [question] or reply to homework image",
-  credits: 'Chatgpt',
-  cooldown: 0,
+  aliases: ["gpt", "study", "exam"],
+  description: "ChatGPT School Assistant (Public)",
+  usage: "ai [question]",
+  credits: "ChatGPT",
+  cooldown: 0
 };
 
-module.exports.run = async function({ api, event, args }) {
-  const promptText = args.join(" ").trim();
-  const repliedText = event.messageReply?.body || '';
-  const studentPrompt = [repliedText, promptText].filter(Boolean).join("\n");
+module.exports.run = async function ({ api, event, args }) {
+  const question = args.join(" ").trim();
 
-  if (!studentPrompt && !event.messageReply?.attachments?.[0]?.url) {
+  if (!question) {
     return api.sendMessage(
-      "❌ Please ask a school-related question or reply to a homework image.",
+      "❌ Please ask a school-related question.\n\nExample:\nai Explain photosynthesis",
       event.threadID,
       event.messageID
     );
@@ -29,66 +27,53 @@ module.exports.run = async function({ api, event, args }) {
 You are CHATGPT SCHOOL ASSISTANT.
 
 Rules:
-- Always give academic, school-appropriate answers.
-- If math → solve step-by-step.
-- If multiple choice → choose correct answer and explain why.
-- If exam/reviewer → summarize clearly with key points.
-- If essay/research → formal academic tone.
-- If student asks for simple explanation → explain like a teacher.
+- Academic / school-related only.
+- Explain like a teacher.
+- Step-by-step for math.
+- Explain answers for multiple choice.
 - Use Filipino if the student uses Filipino.
-- Cite sources in APA format when applicable.
+- No unsafe or non-academic content.
 `;
 
   api.sendMessage(
-    "🎓 ChatGPT School Assistant is analyzing...",
+    "🎓 ChatGPT School Assistant is thinking...",
     event.threadID,
     async (err, info) => {
       if (err) return;
 
       try {
-        let imageUrl = "";
-        const attachment = event.messageReply?.attachments?.[0];
-        if (attachment?.url) imageUrl = attachment.url;
-
         const { data } = await axios.get(
-          "https://apis-rho-nine.vercel.app/gemini",
+          "https://urangkapolka.vercel.app/api/chatgpt4",
           {
             params: {
-              ask: `${systemPrompt}\n\nStudent Question:\n${studentPrompt}`,
-              imageurl: imageUrl
+              prompt: `${systemPrompt}\n\nStudent Question:\n${question}`
             },
             timeout: 15000
           }
         );
 
-        const answer = data.description || "No academic answer generated.";
+        const answer =
+          data?.response ||
+          data?.answer ||
+          data?.result ||
+          "No academic response generated.";
 
-        api.getUserInfo(event.senderID, (err, userInfo) => {
-          const studentName =
-            userInfo?.[event.senderID]?.name || "Student";
-          const timePH = new Date().toLocaleString('en-US', {
-            timeZone: 'Asia/Manila'
-          });
-
-          const finalMessage = 
+        api.editMessage(
 `🎓 CHATGPT SCHOOL ASSISTANT
 ━━━━━━━━━━━━━━━━━━━━━━
-📘 Academic Response:
+📘 Academic Answer:
 
 ${answer}
 
 ━━━━━━━━━━━━━━━━━━━━━━
-👤 Student: ${studentName}
-🕒 ${timePH}
-📚 Mode: Exam & Study Assistant`;
-
-          api.editMessage(finalMessage, info.messageID);
-        });
+📚 Mode: Public School Assistant`,
+          info.messageID
+        );
 
       } catch (error) {
         console.error("AI Error:", error);
         api.editMessage(
-          "❌ School Assistant is temporarily unavailable. Please try again later.",
+          "❌ School Assistant is currently unavailable.\nPlease try again later.",
           info.messageID
         );
       }
