@@ -3,63 +3,87 @@ const moment = require("moment-timezone");
 const fs = require("fs");
 
 module.exports.config = {
-  name: "auto-weather-ph-all",
-  version: "FINAL",
+  name: "auto-weather-ph-zones",
+  version: "FINAL-ZONES",
 };
 
-const API_KEY = "7/TlRoS75kuvxH0ekixmTA==2ggIWhQ14ih84mE4";
-const CACHE_FILE = "./weatherIndex.json";
-
+const WEATHER_KEY = "7a165fb761f045bdaf3165634252712";
+const POST_INTERVAL = 10 * 60 * 1000;
+const CACHE_FILE = "./weatherZoneCache.json";
 let started = false;
-let cityIndex = 0;
 
-// 🇵🇭 ALL MAJOR PH CITIES
-const CITIES = [
-  "Manila", "Quezon City", "Caloocan", "Las Pinas", "Makati",
-  "Malabon", "Mandaluyong", "Marikina", "Muntinlupa",
-  "Navotas", "Paranaque", "Pasay", "Pasig", "Pateros",
-  "San Juan", "Taguig", "Valenzuela",
+/* PH ZONES + CITIES */
+const PH_ZONES = {
+  "NCR": [
+    "Manila","Quezon City","Caloocan","Makati","Pasig",
+    "Taguig","Parañaque","Las Piñas","Mandaluyong","Marikina"
+  ],
 
-  "Angeles", "San Fernando Pampanga", "Olongapo",
-  "Baguio", "Dagupan", "San Carlos Pangasinan",
-  "Tuguegarao", "Ilagan", "Cauayan",
+  "North Luzon": [
+    "Baguio","Laoag","Vigan","Tuguegarao",
+    "Ilagan","Cauayan","Aparri"
+  ],
 
-  "Batangas City", "Lipa", "Tanauan",
-  "Calamba", "Santa Rosa Laguna", "San Pablo",
-  "Lucena",
+  "Central Luzon": [
+    "San Fernando Pampanga","Angeles",
+    "Olongapo","Cabanatuan","Tarlac City"
+  ],
 
-  "Naga", "Legazpi", "Iriga", "Sorsogon",
+  "South Luzon": [
+    "Batangas City","Lipa","Lucena",
+    "Calamba","Los Baños","Legazpi","Naga"
+  ],
 
-  "Iloilo City", "Bacolod", "Roxas",
-  "Kalibo", "Antique",
+  "MIMAROPA": [
+    "Puerto Princesa","Calapan",
+    "Odiongan","Boac"
+  ],
 
-  "Cebu City", "Mandaue", "Lapu-Lapu",
-  "Tagbilaran", "Dumaguete",
+  "Western Visayas": [
+    "Iloilo City","Bacolod","Roxas City","Kalibo"
+  ],
 
-  "Tacloban", "Ormoc", "Calbayog",
-  "Catbalogan", "Borongan",
+  "Central Visayas": [
+    "Cebu City","Mandaue","Lapu-Lapu",
+    "Tagbilaran","Dumaguete"
+  ],
 
-  "Zamboanga City", "Dipolog", "Pagadian",
-  "Isabela Basilan",
+  "Eastern Visayas": [
+    "Tacloban","Ormoc","Catbalogan","Maasin"
+  ],
 
-  "Cagayan de Oro", "Iligan",
-  "Malaybalay", "Valencia Bukidnon",
+  "Zamboanga Peninsula": [
+    "Zamboanga City","Pagadian","Dipolog"
+  ],
 
-  "Davao City", "Tagum", "Panabo", "Digos",
-  "General Santos", "Koronadal",
+  "Northern Mindanao": [
+    "Cagayan de Oro","Iligan","Valencia"
+  ],
 
-  "Cotabato City", "Kidapawan",
-  "Butuan", "Surigao City",
-  "Tandag", "Bislig",
+  "Davao Region": [
+    "Davao City","Tagum","Panabo","Digos"
+  ],
 
-  "Puerto Princesa"
-];
+  "SOCCSKSARGEN": [
+    "General Santos","Koronadal","Kidapawan"
+  ],
 
-// LOAD INDEX
+  "Caraga": [
+    "Butuan","Surigao City","Bayugan"
+  ],
+
+  "BARMM": [
+    "Cotabato City","Marawi","Jolo"
+  ]
+};
+
+let zoneKeys = Object.keys(PH_ZONES);
+let state = { zone: 0, city: 0 };
+
+/* LOAD CACHE */
 if (fs.existsSync(CACHE_FILE)) {
   try {
-    const data = JSON.parse(fs.readFileSync(CACHE_FILE));
-    cityIndex = data.index || 0;
+    state = JSON.parse(fs.readFileSync(CACHE_FILE));
   } catch {}
 }
 
@@ -67,53 +91,41 @@ module.exports.handleEvent = async function ({ api }) {
   if (started) return;
   started = true;
 
-  global.apiInstance = api;
-
-  console.log("[AUTO WEATHER PH] STARTED 🇵🇭");
-  setTimeout(() => postWeather(api), 5000);
+  console.log("[AUTO WEATHER PH] ZONES MODE 24/7");
+  setTimeout(() => autoPost(api), 5000);
 };
 
-async function postWeather(api) {
+async function autoPost(api) {
   try {
-    const city = CITIES[cityIndex];
+    const zoneName = zoneKeys[state.zone];
+    const cities = PH_ZONES[zoneName];
+    const city = cities[state.city];
 
-    const res = await axios.get(
-      `https://api.api-ninjas.com/v1/weather?city=${encodeURIComponent(city)}`,
-      {
-        headers: { "X-Api-Key": API_KEY },
-      }
-    );
+    state.city++;
+    if (state.city >= cities.length) {
+      state.city = 0;
+      state.zone = (state.zone + 1) % zoneKeys.length;
+    }
+    saveState();
 
+    const url = `https://api.weatherapi.com/v1/current.json?key=${WEATHER_KEY}&q=${encodeURIComponent(city)}&aqi=no`;
+    const res = await axios.get(url);
     const w = res.data;
-    if (!w || !w.temp) throw new Error("No weather data");
 
-    const message = `🌦️ 𝗪𝗘𝗔𝗧𝗛𝗘𝗥 𝗨𝗣𝗗𝗔𝗧𝗘 | 🇵🇭
+    const msg = `🌦️ 𝗪𝗘𝗔𝗧𝗛𝗘𝗥 𝗨𝗣𝗗𝗔𝗧𝗘 | 🇵🇭
 
-📍 ${city}, Philippines
+📍 ${w.location.name}
+🗺️ Zone: ${zoneName}
 
-🌡️ Temp: ${w.temp}°C
-🤗 Feels Like: ${w.feels_like}°C
-💧 Humidity: ${w.humidity}%
-🌬️ Wind: ${w.wind_speed} km/h
-☁️ Cloud: ${w.cloud_pct}%
+🌡️ Temp: ${w.current.temp_c}°C
+🤒 Feels Like: ${w.current.feelslike_c}°C
+☁️ Condition: ${w.current.condition.text}
+💧 Humidity: ${w.current.humidity}%
+🌬️ Wind: ${w.current.wind_kph} kph
 
-🕒 ${moment()
-      .tz("Asia/Manila")
-      .format("MMMM DD, YYYY • hh:mm A")}
+🕒 ${moment().tz("Asia/Manila").format("MMMM DD, YYYY • hh:mm A")}
 
-#WeatherPH #${city.replace(/ /g, "")}`;
-
-    const payload = {
-      input: {
-        composer_entry_point: "inline_composer",
-        composer_source_surface: "timeline",
-        idempotence_token: `${Date.now()}_WEATHER`,
-        source: "WWW",
-        message: { text: message },
-        audience: { privacy: { base_state: "EVERYONE" } },
-        actor_id: api.getCurrentUserID(),
-      },
-    };
+#WeatherPH #Panahon #${zoneName.replace(/\s/g,"")}`;
 
     await api.httpPost(
       "https://www.facebook.com/api/graphql/",
@@ -122,24 +134,28 @@ async function postWeather(api) {
         fb_api_req_friendly_name: "ComposerStoryCreateMutation",
         fb_api_caller_class: "RelayModern",
         doc_id: "7711610262190099",
-        variables: JSON.stringify(payload),
+        variables: JSON.stringify({
+          input: {
+            composer_entry_point: "inline_composer",
+            composer_source_surface: "timeline",
+            idempotence_token: Date.now(),
+            source: "WWW",
+            message: { text: msg },
+            audience: { privacy: { base_state: "EVERYONE" } },
+            actor_id: api.getCurrentUserID(),
+          },
+        }),
       }
     );
 
-    console.log(`[WEATHER] POSTED ✔ ${city}`);
-
-    // NEXT CITY
-    cityIndex = (cityIndex + 1) % CITIES.length;
-    fs.writeFileSync(CACHE_FILE, JSON.stringify({ index: cityIndex }));
-
-  } catch (err) {
-    console.error("[WEATHER ERROR]", err.message);
+    console.log(`[WEATHER POSTED] ${city} (${zoneName})`);
+  } catch (e) {
+    console.error("[WEATHER ERROR]", e.message);
   }
+
+  setTimeout(() => autoPost(api), POST_INTERVAL);
 }
 
-// ⏱️ EVERY 10 MINUTES (SAFE SA API)
-setInterval(() => {
-  if (global.apiInstance) {
-    postWeather(global.apiInstance);
-  }
-}, 10 * 60 * 1000);
+function saveState() {
+  fs.writeFileSync(CACHE_FILE, JSON.stringify(state));
+}
