@@ -1,84 +1,111 @@
 const axios = require("axios");
 const moment = require("moment-timezone");
+const fs = require("fs");
+const path = require("path");
 
 module.exports.config = {
-  name: "auto-news",
-  version: "1.1.0",
+  name: "auto-news-247-abs",
+  version: "FINAL-24-7",
 };
 
-let isStarted = false;
-let lastPostedLink = null; // anti-duplicate (isa-isa)
+let started = false;
+const HISTORY_FILE = path.join(__dirname, "posted_news.json");
+
+// 🔐 load posted history (restart-safe)
+let postedLinks = new Set();
+if (fs.existsSync(HISTORY_FILE)) {
+  try {
+    postedLinks = new Set(JSON.parse(fs.readFileSync(HISTORY_FILE)));
+  } catch {
+    postedLinks = new Set();
+  }
+}
 
 module.exports.handleEvent = async function ({ api }) {
-  if (!isStarted) {
-    isStarted = true;
+  if (!started) {
+    started = true;
     startAutoNews(api);
   }
 };
 
-function startAutoNews(api) {
+async function startAutoNews(api) {
   const API_KEY = "pub_0318d0b2916048e0914e48838720b00c";
-  const URL = "https://newsdata.io/api/1/latest";
+  const NEWS_URL =
+    `https://newsdata.io/api/1/latest?apikey=${API_KEY}&country=ph&language=en`;
 
-  setInterval(async () => {
+  const INTERVAL = 5 * 60 * 1000; // 5 minutes EXACT
+
+  const postNews = async () => {
     try {
-      const res = await axios.get(URL, {
-        params: {
-          apikey: API_KEY,
-          q: "news",
-          language: "en",
-        },
-      });
+      const now = moment().tz("Asia/Manila");
 
-      const articles = res.data.results;
-      if (!articles || articles.length === 0) return;
+      const res = await axios.get(NEWS_URL, { timeout: 20000 });
+      const articles = res.data.results || [];
+      if (!articles.length) return;
 
-      // 👉 KUNIN LANG YUNG UNANG HINDI PA NAIPO-POST
-      const news = articles.find(n => n.link && n.link !== lastPostedLink);
-      if (!news) return;
+      const article = articles.find(
+        a => a.link && !postedLinks.has(a.link)
+      );
+      if (!article) return;
 
-      lastPostedLink = news.link; // mark as posted
+      // save link
+      postedLinks.add(article.link);
+      fs.writeFileSync(HISTORY_FILE, JSON.stringify([...postedLinks]));
 
-      const time = moment().tz("Asia/Manila").format("MMM D, YYYY • hh:mm A");
+      // 🖼️ auto image
+      let imagePath = null;
+      if (article.image_url) {
+        try {
+          const img = await axios.get(article.image_url, {
+            responseType: "arraybuffer",
+            timeout: 15000,
+          });
+          imagePath = path.join(__dirname, "news_img.jpg");
+          fs.writeFileSync(imagePath, img.data);
+        } catch {}
+      }
 
-      const message =
-`📰 LATEST NEWS
-━━━━━━━━━━━━
-${news.title}
+      // 📰 ABS-CBN STYLE TEXT
+      const message = `
+${article.title}
 
-${news.description || ""}
+${article.description || ""}
 
-🌍 ${news.country?.join(", ") || "Global"}
-⏰ ${time}
+🗞 ${article.source_id}
+🕒 ${article.pubDate}
 
-🔗 ${news.link}`;
+🔗 ${article.link}
+`;
 
-      const formData = {
-        input: {
-          composer_entry_point: "inline_composer",
-          composer_source_surface: "timeline",
-          idempotence_token: `${Date.now()}_NEWS`,
-          source: "WWW",
-          message: { text: message },
-          audience: { privacy: { base_state: "EVERYONE" } },
-          actor_id: api.getCurrentUserID(),
-        },
-      };
+      let postData = { body: message };
 
-      await api.httpPost(
-        "https://www.facebook.com/api/graphql/",
+      if (imagePath && fs.existsSync(imagePath)) {
+        postData.attachment = fs.createReadStream(imagePath);
+      }
+
+      const result = await api.postFormData(
+        `https://graph.facebook.com/${api.getCurrentUserID()}/feed`,
         {
-          av: api.getCurrentUserID(),
-          fb_api_req_friendly_name: "ComposerStoryCreateMutation",
-          fb_api_caller_class: "RelayModern",
-          doc_id: "7711610262190099",
-          variables: JSON.stringify(formData),
+          access_token: api.getAccessToken(),
+          ...postData,
         }
       );
 
-      console.log("[AUTO NEWS] Posted ONE news:", news.title);
-    } catch (e) {
-      console.error("[AUTO NEWS ERROR]", e.message);
+      console.log(
+        `[24/7 NEWS] ${now.format("YYYY-MM-DD HH:mm")} → ${result.id}`
+      );
+
+      if (imagePath && fs.existsSync(imagePath)) {
+        fs.unlinkSync(imagePath);
+      }
+    } catch (err) {
+      console.error("AUTO NEWS ERROR:", err.message);
     }
-  }, 3 * 60 * 1000); // ⏱️ every 3 minutes (ISA LANG)
+  };
+
+  // 🚀 start immediately
+  postNews();
+
+  // 🔁 NEVER STOPS
+  setInterval(postNews, INTERVAL);
 }
