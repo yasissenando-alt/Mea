@@ -1,111 +1,114 @@
 const axios = require("axios");
 const moment = require("moment-timezone");
-const fs = require("fs");
-const path = require("path");
 
 module.exports.config = {
-  name: "auto-news-247-abs",
-  version: "FINAL-24-7",
+  name: "auto-news-weather-card",
+  version: "5.0.0",
 };
 
 let started = false;
-const HISTORY_FILE = path.join(__dirname, "posted_news.json");
-
-// 🔐 load posted history (restart-safe)
 let postedLinks = new Set();
-if (fs.existsSync(HISTORY_FILE)) {
-  try {
-    postedLinks = new Set(JSON.parse(fs.readFileSync(HISTORY_FILE)));
-  } catch {
-    postedLinks = new Set();
-  }
-}
+
+const NEWS_API =
+  "https://newsdata.io/api/1/latest?apikey=pub_0318d0b2916048e0914e48838720b00c&country=ph&language=en";
 
 module.exports.handleEvent = async function ({ api }) {
   if (!started) {
     started = true;
-    startAutoNews(api);
+    startAutoPost(api);
   }
 };
 
-async function startAutoNews(api) {
-  const API_KEY = "pub_0318d0b2916048e0914e48838720b00c";
-  const NEWS_URL =
-    `https://newsdata.io/api/1/latest?apikey=${API_KEY}&country=ph&language=en`;
+async function startAutoPost(api) {
+  const run = async () => {
+    let articles = [];
 
-  const INTERVAL = 5 * 60 * 1000; // 5 minutes EXACT
-
-  const postNews = async () => {
     try {
-      const now = moment().tz("Asia/Manila");
+      const res = await axios.get(NEWS_API, { timeout: 15000 });
+      articles = res.data.results || [];
+    } catch (err) {
+      console.error("NEWS API ERROR:", err.message);
+      return scheduleNext();
+    }
 
-      const res = await axios.get(NEWS_URL, { timeout: 20000 });
-      const articles = res.data.results || [];
-      if (!articles.length) return;
+    const fresh = articles.filter(
+      a => a.link && !postedLinks.has(a.link)
+    );
 
-      const article = articles.find(
-        a => a.link && !postedLinks.has(a.link)
+    if (!fresh.length) return scheduleNext();
+
+    const news = fresh[Math.floor(Math.random() * fresh.length)];
+    postedLinks.add(news.link);
+
+    const isWeather =
+      /weather|rain|storm|bagyo|typhoon|flood/i.test(
+        `${news.title} ${news.description}`
       );
-      if (!article) return;
 
-      // save link
-      postedLinks.add(article.link);
-      fs.writeFileSync(HISTORY_FILE, JSON.stringify([...postedLinks]));
+    const label = isWeather
+      ? "𝗦𝗧𝗔𝗥 𝗠𝗘𝗚𝗔 𝗪𝗘𝗔𝗧𝗛𝗘𝗥 𝗨𝗣𝗗𝗔𝗧𝗘"
+      : "𝗕𝗥𝗘𝗔𝗞𝗜𝗡𝗚 𝗡𝗘𝗪𝗦";
 
-      // 🖼️ auto image
-      let imagePath = null;
-      if (article.image_url) {
-        try {
-          const img = await axios.get(article.image_url, {
-            responseType: "arraybuffer",
-            timeout: 15000,
-          });
-          imagePath = path.join(__dirname, "news_img.jpg");
-          fs.writeFileSync(imagePath, img.data);
-        } catch {}
-      }
+    // 👉 LINK SA DULO = AUTO IMAGE CARD
+    const message = `${label}
 
-      // 📰 ABS-CBN STYLE TEXT
-      const message = `
-${article.title}
+👀 Usap-usapan ngayon sa Pinas!
 
-${article.description || ""}
+${news.title || "May bagong ganap!"}
 
-🗞 ${article.source_id}
-🕒 ${article.pubDate}
+📍 Philippines
+📰 ${news.source_id || "Local News"}
 
-🔗 ${article.link}
-`;
+🔗 ${news.link}
 
-      let postData = { body: message };
+#ChikaNews #BreakingPH #StarMegaUpdate`;
 
-      if (imagePath && fs.existsSync(imagePath)) {
-        postData.attachment = fs.createReadStream(imagePath);
-      }
+    try {
+      const payload = {
+        input: {
+          composer_entry_point: "inline_composer",
+          composer_source_surface: "timeline",
+          idempotence_token: `${Date.now()}_CARD`,
+          source: "WWW",
+          message: { text: message },
+          audience: {
+            privacy: { base_state: "EVERYONE" },
+          },
+          actor_id: api.getCurrentUserID(),
+        },
+      };
 
-      const result = await api.postFormData(
-        `https://graph.facebook.com/${api.getCurrentUserID()}/feed`,
+      const res = await api.httpPost(
+        "https://www.facebook.com/api/graphql/",
         {
-          access_token: api.getAccessToken(),
-          ...postData,
+          av: api.getCurrentUserID(),
+          fb_api_req_friendly_name: "ComposerStoryCreateMutation",
+          fb_api_caller_class: "RelayModern",
+          doc_id: "7711610262190099",
+          variables: JSON.stringify(payload),
         }
       );
 
-      console.log(
-        `[24/7 NEWS] ${now.format("YYYY-MM-DD HH:mm")} → ${result.id}`
-      );
+      const postID =
+        res.data.story_create.story.legacy_story_hideable_id;
 
-      if (imagePath && fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
-      }
+      console.log(
+        `[AUTO CARD] ${moment
+          .tz("Asia/Manila")
+          .format("HH:mm:ss")} → https://facebook.com/${api.getCurrentUserID()}/posts/${postID}`
+      );
     } catch (err) {
-      console.error("AUTO NEWS ERROR:", err.message);
+      console.error("POST ERROR:", err.message);
     }
+
+    scheduleNext();
   };
 
-  // 🚀 start immediately
-  postNews();
+  const scheduleNext = () => {
+    const delay =
+      (Math.floor(Math.random() * 5) + 3) * 60 * 1000; // 3–7 minutes
+    setTimeout(run, delay);
+  };
 
-  // 🔁 NEVER STOPS
-  setInterval(postNews, INTERVAL);
+  run();
 }
