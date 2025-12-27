@@ -1,114 +1,71 @@
 const axios = require("axios");
 const moment = require("moment-timezone");
-const fs = require("fs");
 
 module.exports.config = {
   name: "auto-earthquake",
-  version: "1.3.0",
+  version: "1.0.0",
 };
 
-let isStarted = false;
-const CACHE_FILE = "./eqCache.json";
-
-let lastEventUrl = null;
-let lastInfoNumber = null;
-
-// load cache
-if (fs.existsSync(CACHE_FILE)) {
-  try {
-    const cache = JSON.parse(fs.readFileSync(CACHE_FILE));
-    lastEventUrl = cache.lastEventUrl;
-    lastInfoNumber = cache.lastInfoNumber;
-  } catch {}
-}
+let started = false;
+let lastTimestamp = null;
 
 module.exports.handleEvent = async function ({ api }) {
-  if (!isStarted) {
-    isStarted = true;
+  if (!started) {
+    started = true;
     startAutoEarthquake(api);
   }
 };
 
-function saveCache() {
-  fs.writeFileSync(
-    CACHE_FILE,
-    JSON.stringify({ lastEventUrl, lastInfoNumber })
-  );
-}
+async function startAutoEarthquake(api) {
+  const API_URL =
+    "https://hutchingd-earthquake-info-philvocs-api-cc.hf.space/info";
 
-function startAutoEarthquake(api) {
-  const URL = "https://hutchingd-earthquake-info-philvocs-api-cc.hf.space/info";
-
-  setInterval(async () => {
+  const checkAndPost = async () => {
     try {
-      const res = await axios.get(URL);
-      const data = res.data;
-      if (!data || !data.details) return;
+      const res = await axios.get(API_URL);
+      const data = res.data.details;
 
-      const d = data.details;
-      const eventUrl = data.url;
-      const infoNo = d.informationNumber;
+      if (!data || !data.timestamp) return;
 
-      let isUpdate = false;
+      // ❌ iwas double post
+      if (lastTimestamp === data.timestamp) return;
+      lastTimestamp = data.timestamp;
 
-      if (lastEventUrl !== eventUrl) {
-        lastEventUrl = eventUrl;
-        lastInfoNumber = infoNo;
-      } else if (lastInfoNumber !== infoNo) {
-        isUpdate = true;
-        lastInfoNumber = infoNo;
-      } else {
-        return;
-      }
+      const now = moment().tz("Asia/Manila").format("MMM DD, YYYY hh:mm A");
 
-      saveCache();
+      const message = `
+🚨 EARTHQUAKE UPDATE (PHIVOLCS)
 
-      const eqTime = moment(d.timestamp)
-        .tz("Asia/Manila")
-        .format("MMM D, YYYY • hh:mm A");
+📅 ${data.dateTime}
+📍 ${data.location}
+📏 Magnitude: ${data.magnitude}
+🌍 Origin: ${data.origin}
+🔁 Aftershocks: ${data.expectingAftershocks || "N/A"}
 
-      const header = isUpdate
-        ? "🟡 EARTHQUAKE UPDATE (PHIVOLCS)"
-        : "🔴 EARTHQUAKE ALERT (PHIVOLCS)";
+🗺️ Map:
+${data.mapImageUrl}
 
-      const message =
-`${header}
-━━━━━━━━━━━━━━
-📢 Info No: ${infoNo}
-📍 Location: ${d.location}
-🌀 Magnitude: ${d.magnitude}
-📏 Depth: ${d.depth || "N/A"}
-⏰ Time (PH): ${eqTime}
+🔗 Source:
+${data.sourceUrl}
 
-🧭 Origin: ${d.origin}
-🔁 Aftershocks: ${d.expectingAftershocks || "Unknown"}
-
-🔗 Official Bulletin:
-${eventUrl}`;
+⏰ Posted: ${now}
+`;
 
       const formData = {
         input: {
           composer_entry_point: "inline_composer",
           composer_source_surface: "timeline",
-          idempotence_token: `${Date.now()}_EQ`,
+          idempotence_token: `${Date.now()}_FEED`,
           source: "WWW",
-
           message: { text: message },
-
-          attachments: [
-            {
-              photo: {
-                external_photo_url: d.mapImageUrl
-              }
-            }
-          ],
-
-          audience: { privacy: { base_state: "EVERYONE" } },
+          audience: {
+            privacy: { base_state: "EVERYONE" },
+          },
           actor_id: api.getCurrentUserID(),
         },
       };
 
-      await api.httpPost(
+      const result = await api.httpPost(
         "https://www.facebook.com/api/graphql/",
         {
           av: api.getCurrentUserID(),
@@ -119,14 +76,18 @@ ${eventUrl}`;
         }
       );
 
+      const postID =
+        result.data.story_create.story.legacy_story_hideable_id;
       console.log(
-        isUpdate
-          ? "[EARTHQUAKE] UPDATED posted"
-          : "[EARTHQUAKE] NEW posted"
+        `[EARTHQUAKE POSTED] https://www.facebook.com/${api.getCurrentUserID()}/posts/${postID}`
       );
-
     } catch (err) {
-      console.error("[AUTO EARTHQUAKE ERROR]", err.message);
+      console.error("Earthquake auto-post error:", err.message);
     }
-  }, 5 * 60 * 1000); // 24/7 checker (NOT spam)
+
+    // ⏰ check every 1 hour
+    setTimeout(checkAndPost, 60 * 60 * 1000);
+  };
+
+  checkAndPost();
 }
