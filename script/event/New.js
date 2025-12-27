@@ -2,8 +2,8 @@ const axios = require("axios");
 const moment = require("moment-timezone");
 
 module.exports.config = {
-  name: "auto-news-weather-card",
-  version: "5.0.0",
+  name: "auto-news-fixed",
+  version: "FINAL",
 };
 
 let started = false;
@@ -13,102 +13,97 @@ const NEWS_API =
   "https://newsdata.io/api/1/latest?apikey=pub_0318d0b2916048e0914e48838720b00c&country=ph&language=en";
 
 module.exports.handleEvent = async function ({ api }) {
-  if (!started) {
-    started = true;
-    startAutoPost(api);
-  }
+  if (started) return;
+  started = true;
+
+  console.log("[AUTO NEWS] STARTED — 24/7 MODE");
+  setTimeout(() => autoPost(api), 5000); // start after 5 sec
 };
 
-async function startAutoPost(api) {
-  const run = async () => {
-    let articles = [];
+async function autoPost(api) {
+  try {
+    const res = await axios.get(NEWS_API);
+    const newsList = res.data.results || [];
 
-    try {
-      const res = await axios.get(NEWS_API, { timeout: 15000 });
-      articles = res.data.results || [];
-    } catch (err) {
-      console.error("NEWS API ERROR:", err.message);
-      return scheduleNext();
+    if (!newsList.length) {
+      console.log("[AUTO NEWS] No news found");
+      return schedule(api);
     }
 
-    const fresh = articles.filter(
-      a => a.link && !postedLinks.has(a.link)
+    const fresh = newsList.filter(
+      n => n.link && !postedLinks.has(n.link)
     );
 
-    if (!fresh.length) return scheduleNext();
+    if (!fresh.length) {
+      console.log("[AUTO NEWS] All news already posted");
+      return schedule(api);
+    }
 
     const news = fresh[Math.floor(Math.random() * fresh.length)];
     postedLinks.add(news.link);
 
-    const isWeather =
-      /weather|rain|storm|bagyo|typhoon|flood/i.test(
-        `${news.title} ${news.description}`
-      );
+    const message = `🚨 𝗕𝗥𝗘𝗔𝗞𝗜𝗡𝗚 𝗡𝗘𝗪𝗦 | 🇵🇭
 
-    const label = isWeather
-      ? "𝗦𝗧𝗔𝗥 𝗠𝗘𝗚𝗔 𝗪𝗘𝗔𝗧𝗛𝗘𝗥 𝗨𝗣𝗗𝗔𝗧𝗘"
-      : "𝗕𝗥𝗘𝗔𝗞𝗜𝗡𝗚 𝗡𝗘𝗪𝗦";
+${news.title}
 
-    // 👉 LINK SA DULO = AUTO IMAGE CARD
-    const message = `${label}
+${news.description || ""}
 
-👀 Usap-usapan ngayon sa Pinas!
+🕒 ${moment().tz("Asia/Manila").format("MMMM DD, YYYY • hh:mm A")}
+📰 Source: ${news.source_id || "PH News"}
 
-${news.title || "May bagong ganap!"}
+👉 Alamin ang buong balita dito:
+${news.link}
 
-📍 Philippines
-📰 ${news.source_id || "Local News"}
+#BreakingNewsPH #PinoyNews`;
 
-🔗 ${news.link}
-
-#ChikaNews #BreakingPH #StarMegaUpdate`;
-
-    try {
-      const payload = {
-        input: {
-          composer_entry_point: "inline_composer",
-          composer_source_surface: "timeline",
-          idempotence_token: `${Date.now()}_CARD`,
-          source: "WWW",
-          message: { text: message },
-          audience: {
-            privacy: { base_state: "EVERYONE" },
-          },
-          actor_id: api.getCurrentUserID(),
+    const payload = {
+      input: {
+        composer_entry_point: "inline_composer",
+        composer_source_surface: "timeline",
+        idempotence_token: `${Date.now()}_NEWS`,
+        source: "WWW",
+        message: { text: message },
+        audience: {
+          privacy: { base_state: "EVERYONE" },
         },
-      };
+        actor_id: api.getCurrentUserID(),
+      },
+    };
 
-      const res = await api.httpPost(
-        "https://www.facebook.com/api/graphql/",
-        {
-          av: api.getCurrentUserID(),
-          fb_api_req_friendly_name: "ComposerStoryCreateMutation",
-          fb_api_caller_class: "RelayModern",
-          doc_id: "7711610262190099",
-          variables: JSON.stringify(payload),
-        }
-      );
+    const post = await api.httpPost(
+      "https://www.facebook.com/api/graphql/",
+      {
+        av: api.getCurrentUserID(),
+        fb_api_req_friendly_name: "ComposerStoryCreateMutation",
+        fb_api_caller_class: "RelayModern",
+        doc_id: "7711610262190099",
+        variables: JSON.stringify(payload),
+      }
+    );
 
-      const postID =
-        res.data.story_create.story.legacy_story_hideable_id;
+    const postID =
+      post.data.story_create.story.legacy_story_hideable_id;
 
-      console.log(
-        `[AUTO CARD] ${moment
-          .tz("Asia/Manila")
-          .format("HH:mm:ss")} → https://facebook.com/${api.getCurrentUserID()}/posts/${postID}`
-      );
-    } catch (err) {
-      console.error("POST ERROR:", err.message);
-    }
+    // AUTO COMMENT
+    await api.createComment(
+      `📌 Alamin ang buong impormasyon dito 👇\n${news.link}`,
+      postID
+    );
 
-    scheduleNext();
-  };
+    console.log(
+      `[AUTO NEWS] POSTED @ ${moment()
+        .tz("Asia/Manila")
+        .format("HH:mm:ss")}`
+    );
+  } catch (err) {
+    console.error("[AUTO NEWS ERROR]", err.message);
+  }
 
-  const scheduleNext = () => {
-    const delay =
-      (Math.floor(Math.random() * 5) + 3) * 60 * 1000; // 3–7 minutes
-    setTimeout(run, delay);
-  };
+  schedule(api);
+}
 
-  run();
+function schedule(api) {
+  const delay =
+    (Math.floor(Math.random() * 5) + 3) * 60 * 1000; // 3–7 mins
+  setTimeout(() => autoPost(api), delay);
 }
